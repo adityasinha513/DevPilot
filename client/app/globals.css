@@ -72,7 +72,7 @@
   --chart-3: oklch(0.646 0.222 41.116);
   --chart-4: oklch(0.553 0.195 38.402);
   --chart-5: oklch(0.47 0.157 37.304);
-  --radius: 0;
+  --radius: 0.55rem;
   --sidebar: oklch(0.986 0.002 67.8);
   --sidebar-foreground: oklch(0.147 0.004 49.3);
   --sidebar-primary: oklch(0.214 0.009 43.1);
@@ -122,12 +122,20 @@
     @apply border-border outline-ring/50;
   }
   body {
-    @apply bg-background text-foreground;
+    @apply bg-background text-foreground antialiased;
   }
   button:not(:disabled), [role="button"]:not(:disabled) {
     cursor: pointer;
   }
   html {
-    @apply font-mono;
+    @apply font-sans;
   }
+}
+
+@layer utilities {
+  .surface-grid {
+    background-image: linear-gradient(to right, color-mix(in oklch, var(--border), transparent 60%) 1px, transparent 1px), linear-gradient(to bottom, color-mix(in oklch, var(--border), transparent 60%) 1px, transparent 1px);
+    background-size: 32px 32px;
+  }
+  .focus-ring { @apply focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background; }
 }

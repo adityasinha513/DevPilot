@@ -8,3 +8,21 @@ Thumbs.db
 .env
 .env.*
 !.env.example
+
+# Dependencies and build output
+node_modules/
+.next/
+dist/
+build/
+target/
+*.tsbuildinfo
+
+# Local configuration and logs
+application-local.properties
+application-local.yml
+*.log
+
+# Coverage and temporary files
+coverage/
+tmp/
+temp/
