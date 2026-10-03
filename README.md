@@ -2,217 +2,296 @@
 
 DevPilot is an AI-powered GitHub repository assistant that lets developers connect a repository, index its codebase, and ask grounded questions about the code using semantic retrieval and Retrieval-Augmented Generation (RAG).
 
-## Features
-
-- GitHub OAuth2 authentication
-- GitHub repository catalog and repository connection
-- Commit-scoped repository ingestion
-- Language-aware heuristic code chunking
-- Spring AI chat and embedding models
-- PostgreSQL with pgvector storage
-- Semantic code retrieval with bounded context selection
-- Grounded repository Q&A
-- Conversation history
-- File and line-level GitHub citations
-- Repository and conversation ownership checks
-- Ingestion progress tracking
-- Retry handling for failed ingestion
-- Dark/light theme support in the web client
+---
 
 ## Architecture
 
 ```mermaid
 flowchart TD
-    A[GitHub OAuth2] --> B[Repository Selection]
-    B --> C[GitHub API]
-    C --> D[Commit-scoped Ingestion]
-    D --> E[Files and Code Chunks]
-    E --> F[Spring AI Embeddings]
-    F --> G[PostgreSQL + pgvector]
-    G --> H[Semantic Retrieval]
-    H --> I[Bounded RAG Context]
-    I --> J[Spring AI Chat Model]
-    J --> K[Grounded Answer + GitHub Citations]
+    subgraph Client ["Frontend (Next.js 16 + React 19)"]
+        UI[Web UI]
+        Chat[Chat Interface]
+        Cat[Repository Catalog]
+    end
+
+    subgraph Backend ["Backend (Spring Boot 4 + Java 21)"]
+        Auth[OAuth2 / Session Security]
+        Ingest[Repository Ingestion Service]
+        Chunker[Language-Aware Chunking]
+        Embed[Embedding Service]
+        ChatSvc[Repository Chat Service]
+        Flyway[Flyway Migrations]
+    end
+
+    subgraph External ["External Services"]
+        GH[GitHub REST API]
+        OAI[OpenAI gpt-4o-mini & text-embedding-3-small]
+    end
+
+    subgraph Storage ["Database (Render PostgreSQL)"]
+        PG[(PostgreSQL + pgvector)]
+    end
+
+    UI -->|Session Cookie + CSRF| Auth
+    Cat -->|GitHub Repositories| Ingest
+    Ingest -->|Fetch Tree & Blobs| GH
+    Ingest -->|File Content| Chunker
+    Chunker -->|Code Chunks| Embed
+    Embed -->|Vector Embeddings| OAI
+    Embed -->|Save Embeddings| PG
+    Chat -->|Question| ChatSvc
+    ChatSvc -->|Vector Similarity HNSW| PG
+    ChatSvc -->|Prompt + Context| OAI
+    ChatSvc -->|Grounded Answer + Citations| Chat
+    Flyway -->|Apply V1__initial_schema.sql| PG
 ```
+
+---
 
 ## Tech Stack
 
 ### Backend
-
-- Java 21
-- Spring Boot 4.x
-- Spring Security OAuth2 Client
-- Spring AI
-- Spring Data JPA
-- PostgreSQL
-- pgvector
-- Maven
+- **Java 21** with **Spring Boot 4.1.x**
+- **Spring Security** with OAuth2 Client & session cookie protection (`SameSite=None`, `Secure` in production)
+- **Spring AI 2.0.1** (OpenAI Chat `gpt-4o-mini`, Embeddings `text-embedding-3-small`)
+- **Spring Data JPA** with Hibernate (DDL validation mode in production)
+- **Flyway** for database migrations (`flyway-database-postgresql`)
+- **Spring Boot Actuator** (`/actuator/health`, liveness/readiness probes)
+- **HikariCP** connection pool with URL normalization for cloud databases
+- **Maven** build system
 
 ### Frontend
+- **Next.js 16** (App Router, Turbopack)
+- **React 19** & **TypeScript**
+- **TanStack React Query v5**
+- **Tailwind CSS 4** with responsive themes (dark/light)
+- Self-contained UI styling (no compile-time external font downloads)
 
-- Next.js 16
-- React 19
-- TypeScript
-- TanStack React Query
-- Tailwind CSS 4
-- shadcn-style UI components
+### Database & Storage
+- **PostgreSQL 16+** with the **pgvector** extension
+- HNSW index with cosine similarity metric (`vector_cosine_ops`)
 
-### Infrastructure
+---
 
-- Docker Compose
-- PostgreSQL with the pgvector extension
+## Core Features
 
-## How It Works
+- **GitHub OAuth2 Authentication**: Secure sign-in with GitHub. User access tokens are encrypted with AES-256 before database storage and never exposed to the client.
+- **CSRF & Session Security**: Cookie-based authentication with CSRF tokens on state-changing requests, cross-site cookie support (`SameSite=None; Secure`), and Spring Security Authorization.
+- **Repository Ingestion & Progress Tracking**: Resolves default branch commit SHA, discovers candidate files, filters out binaries and vendor artifacts, and tracks real-time file counts.
+- **Ingestion Recovery**: In the event of service restart during indexing, `IngestionRecoveryService` automatically transitions interrupted jobs from `RUNNING`/`QUEUED` to `FAILED_INGESTION` with helpful error messages, allowing clean user retries without duplicate processing.
+- **Language-Aware Chunking**: Heuristic chunking splitting files by logical boundaries with sliding window overlaps and line-number tracking.
+- **Semantic Code Retrieval**: Queries are embedded and compared against stored chunk vectors using pgvector HNSW cosine distance.
+- **Grounded Q&A with Citations**: Responses are constrained to authoritative source code context. Every answer includes verifiable GitHub file and line-range citations (`path#Lstart-Lend`).
+- **Resilient External Integrations**: Outbound GitHub and OpenAI API calls include bounded retries, exponential backoff, connection/read timeouts, and fast-fail behavior on permanent client errors (HTTP 4xx).
 
-1. A user signs in with GitHub OAuth2.
-2. DevPilot loads repositories available to the authenticated GitHub user.
-3. The user connects a repository by URL or repository reference.
-4. The backend resolves the current default-branch commit and downloads eligible files.
-5. Files are filtered, language-detected, and split into bounded code chunks.
-6. Spring AI generates embeddings that are stored in PostgreSQL through pgvector.
-7. Chat questions retrieve similar chunks and build a bounded repository context.
-8. The chat model answers from that context and the API returns GitHub file and line citations.
-
-## Local Setup
-
-### Prerequisites
-
-- Java 21
-- Node.js and npm
-- Docker Desktop
-- An OpenAI API key
-- A GitHub OAuth application
-
-### 1. Clone the repository
-
-```powershell
-git clone <repository-url>
-cd DevPilot
-```
-
-### 2. Configure environment variables
-
-Copy the backend example and provide local values:
-
-```powershell
-Copy-Item backend/.env.example backend/.env
-```
-
-The Spring Boot process must receive these variables in its environment. Do not commit the copied file. The frontend can use `client/.env.example` for the API base URL.
-
-### 3. Start PostgreSQL and pgvector
-
-```powershell
-docker compose up -d postgres
-```
-
-The compose file exposes PostgreSQL on `localhost:5433` and creates the `devpilot` database.
-
-### 4. Start the backend
-
-```powershell
-Set-Location backend
-.\mvnw.cmd spring-boot:run
-```
-
-The backend listens on `http://localhost:8080`.
-
-### 5. Start the frontend
-
-In a second terminal:
-
-```powershell
-Set-Location client
-npm install
-npm run dev
-```
-
-The frontend runs at `http://localhost:3000`.
-
-## Environment Variables
-
-Backend variables are listed in [backend/.env.example](backend/.env.example). The frontend variable is listed in [client/.env.example](client/.env.example).
-
-| Variable | Description |
-|---|---|
-| `OPENAI_API_KEY` | OpenAI credential used by Spring AI for chat and embeddings |
-| `OPENAI_CHAT_MODEL` | Chat model name, defaulting to `gpt-4o-mini` |
-| `OPENAI_EMBEDDING_MODEL` | Embedding model name, defaulting to `text-embedding-3-small` |
-| `GITHUB_CLIENT_ID` | GitHub OAuth application client ID |
-| `GITHUB_CLIENT_SECRET` | GitHub OAuth application secret |
-| `DATABASE_URL` | JDBC URL for PostgreSQL |
-| `DATABASE_USERNAME` | PostgreSQL username |
-| `DATABASE_PASSWORD` | PostgreSQL password |
-| `TOKEN_ENCRYPTION_PASSWORD` | Password used to encrypt stored GitHub access tokens |
-| `TOKEN_ENCRYPTION_SALT` | Salt used by the token encryptor |
-| `NEXT_PUBLIC_API_BASE_URL` | Browser-visible backend URL used by the Next.js client |
-
-Never commit `.env` files, API keys, OAuth secrets, database passwords, encryption values, or other credentials.
-
-## GitHub OAuth Setup
-
-Create a GitHub OAuth application and configure its callback URL as:
-
-```text
-http://localhost:8080/login/oauth2/code/github
-```
-
-Set the generated client ID and secret through `GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET`. The application requests `read:user` and `repo` scopes so it can list and read repositories available to the signed-in user.
-
-## Project Structure
-
-```text
-backend/
-  src/main/java/devPilot/backend/
-    config/       Application, security, CORS, crypto, and vector setup
-    controllers/  Authentication, repository, and chat APIs
-    entity/       JPA domain entities
-    github/       GitHub API models and services
-    indexing/     File filtering, language detection, and chunking
-    services/     Ingestion, embeddings, retrieval, and chat workflows
-  src/test/       Backend unit and integration tests
-client/
-  app/            Next.js routes and pages
-  components/     Layout, repository, auth, and UI components
-  lib/            API and authentication clients
-docker/
-  postgres/       PostgreSQL extension initialization
-docker-compose.yml
-```
+---
 
 ## RAG Pipeline
 
 ```text
-Repository
-  -> files
-  -> code chunks
-  -> embeddings
-  -> pgvector
-  -> similarity retrieval
-  -> bounded context
-  -> chat model
-  -> grounded answer and citations
+GitHub Repository
+  │
+  ▼
+Fetch Commit Tree & Filter Candidate Files
+  │
+  ▼
+Extract Text & Heuristic Chunking (Language-aware, line numbers)
+  │
+  ▼
+Generate Vector Embeddings (text-embedding-3-small, 1536 dim)
+  │
+  ▼
+Store in PostgreSQL + pgvector (HNSW cosine similarity index)
+  │
+  ▼
+User Query -> Embed Query -> HNSW Cosine Similarity Search
+  │
+  ▼
+Assemble Bounded Context Bundle & Conversation History
+  │
+  ▼
+OpenAI Prompt (System Instructions: strictly grounded, citations attached)
+  │
+  ▼
+Assistant Message + Verified GitHub Line-Range Citations
 ```
 
-Answers are generated from retrieved repository context. The application attaches citations for the source file and line range used by the response.
+---
 
-## Security
+## Local Development
 
-- GitHub OAuth2 handles authentication.
-- GitHub access tokens are encrypted before persistence with the configured token encryptor.
-- Protected API operations require an authenticated session.
-- Repository reads and writes verify the owning user on the server.
-- Conversation and message operations verify repository/user ownership.
-- Secrets are supplied through environment variables rather than committed configuration.
-- The session cookie is HTTP-only and uses `SameSite=Lax` for local development.
+### Prerequisites
+- **Java 21** JDK installed
+- **Node.js 20+** and **npm**
+- **Docker Desktop** (for local PostgreSQL with pgvector)
+- An **OpenAI API Key**
+- A **GitHub OAuth Application**
 
-## Limitations / Future Improvements
+### 1. Clone the Repository
+```bash
+git clone https://github.com/adityasinha513/DevPilot.git
+cd DevPilot
+```
 
-- Code chunking is language-aware and heuristic rather than AST-based.
-- Embedding calls are currently processed sequentially during ingestion.
-- Ingestion jobs run asynchronously in-process and do not use a durable queue.
-- Production deployments would benefit from centralized observability, rate limiting, and a managed job worker.
+### 2. Start Local PostgreSQL with pgvector
+```bash
+docker compose up -d postgres
+```
+This starts PostgreSQL on port `5433` with the `devpilot` database and pgvector extension pre-installed.
+
+### 3. Configure Backend Environment
+Copy the example environment file:
+```bash
+cp backend/.env.example backend/.env
+```
+Populate `backend/.env` with your values:
+```properties
+DATABASE_URL=jdbc:postgresql://localhost:5433/devpilot
+DATABASE_USERNAME=postgres
+DATABASE_PASSWORD=postgres
+GITHUB_CLIENT_ID=your_github_client_id
+GITHUB_CLIENT_SECRET=your_github_client_secret
+OPENAI_API_KEY=your_openai_api_key
+TOKEN_ENCRYPTION_PASSWORD=local-dev-secret-password-12345
+TOKEN_ENCRYPTION_SALT=0123456789abcdef
+APP_FRONTEND_URL=http://localhost:3000
+APP_CORS_ALLOWED_ORIGINS=http://localhost:3000
+```
+
+### 4. Run the Backend
+On Windows (PowerShell):
+```powershell
+cd backend
+.\mvnw.cmd spring-boot:run
+```
+On Linux/macOS:
+```bash
+cd backend
+./mvnw spring-boot:run
+```
+The backend starts on `http://localhost:8080`. Flyway automatically executes database migrations upon startup.
+
+To run the test suite:
+```powershell
+.\mvnw.cmd test
+```
+
+### 5. Run the Frontend
+In another terminal:
+```bash
+cd client
+npm install
+npm run dev
+```
+The frontend runs at `http://localhost:3000`.
+
+---
+
+## Database Setup & Flyway Migrations
+
+DevPilot manages its database schema exclusively through **Flyway**.
+In production, Hibernate DDL auto-generation is disabled (`spring.jpa.hibernate.ddl-auto=validate`) to ensure Flyway owns schema state and transitions.
+
+The initial migration `V1__initial_schema.sql` creates:
+- `vector` extension
+- `users`: GitHub profile data, encrypted access tokens, timestamps
+- `git_repositories`: Tracked repositories, ingestion counters, indexed commit SHA
+- `repository_processing_jobs`: Ingestion run history, statuses, timestamps
+- `repository_files`: Indexed file metadata, language, sizes, blob hashes
+- `code_chunks`: Deterministic file chunks with start/end line bounds
+- `code_chunk_embeddings`: 1536-dimensional vector column with an **HNSW index** using `vector_cosine_ops`
+- `conversations` & `chat_messages`: Multi-turn chat history with citation metadata
+
+---
+
+## Docker Usage
+
+Both services include multi-stage Dockerfiles optimized for production deployment:
+
+### Build Backend Image
+```bash
+docker build -t devpilot-backend ./backend
+```
+Runs a multi-stage build using `maven:3.9-eclipse-temurin-21` and packages a minimal JRE 21 runtime container running under a dedicated non-root `devpilot` user on port `8080`.
+
+### Build Frontend Image
+```bash
+docker build -t devpilot-client ./client
+```
+Runs a multi-stage Alpine build with Next.js Turbopack compilation and creates a minimal Node.js production runner on port `3000`.
+
+---
+
+## Render Deployment
+
+DevPilot is pre-configured for automated deployment on **Render** using the provided [`render.yaml`](render.yaml) blueprint.
+
+### Deployment Architecture on Render
+1. **Database**: Render PostgreSQL database (`devpilot-db`) with `pgvector` extension support.
+2. **Backend**: Render Web Service (`devpilot-api`) running Docker runtime from `backend/Dockerfile` with health checks at `/actuator/health`.
+3. **Frontend**: Render Web Service (`devpilot-web`) running Docker runtime from `client/Dockerfile`.
+
+### Step-by-Step Render Deployment
+
+1. **Push to GitHub**: Ensure all code is committed and pushed to your repository.
+2. **Create GitHub OAuth App**:
+   - Application Name: `DevPilot`
+   - Homepage URL: `https://<frontend-service-name>.onrender.com`
+   - Authorization callback URL:
+     ```text
+     https://<backend-service-name>.onrender.com/login/oauth2/code/github
+     ```
+3. **Deploy via Render Blueprint**:
+   - Log into the [Render Dashboard](https://dashboard.render.com).
+   - Click **New +** > **Blueprint**.
+   - Connect your `DevPilot` repository.
+   - Render will parse `render.yaml` and configure:
+     - `devpilot-db` (PostgreSQL)
+     - `devpilot-api` (Backend Docker Web Service)
+     - `devpilot-web` (Frontend Docker Web Service)
+4. **Supply Environment Variables**:
+   Render will prompt for missing secret environment variables:
+   - `GITHUB_CLIENT_ID`: Your GitHub OAuth App Client ID
+   - `GITHUB_CLIENT_SECRET`: Your GitHub OAuth App Client Secret
+   - `OPENAI_API_KEY`: Your OpenAI API Key
+   - `APP_FRONTEND_URL`: `https://<frontend-service-name>.onrender.com`
+   - `APP_CORS_ALLOWED_ORIGINS`: `https://<frontend-service-name>.onrender.com`
+   - `NEXT_PUBLIC_API_BASE_URL`: `https://<backend-service-name>.onrender.com`
+5. **Apply & Deploy**:
+   Click **Apply**. Render will automatically provision PostgreSQL, compile and launch the backend with Flyway migrations, and build the frontend container.
+
+---
+
+## Environment Variables Reference
+
+| Variable | Required In | Description |
+|---|---|---|
+| `DATABASE_URL` | Both | Database connection URL. Accepts both `jdbc:postgresql://...` and cloud URI format `postgresql://user:pass@host:port/db`. Auto-wired via `render.yaml`. |
+| `DATABASE_USERNAME` | Local | PostgreSQL username (optional if encoded in `DATABASE_URL`). |
+| `DATABASE_PASSWORD` | Local | PostgreSQL password (optional if encoded in `DATABASE_URL`). |
+| `GITHUB_CLIENT_ID` | Both | GitHub OAuth application client ID. |
+| `GITHUB_CLIENT_SECRET` | Both | GitHub OAuth application client secret. |
+| `OPENAI_API_KEY` | Both | OpenAI API key for embeddings and Q&A chat. |
+| `OPENAI_CHAT_MODEL` | Optional | Chat model name (default: `gpt-4o-mini`). |
+| `OPENAI_EMBEDDING_MODEL` | Optional | Embedding model name (default: `text-embedding-3-small`). |
+| `TOKEN_ENCRYPTION_PASSWORD` | Both | Secret key used to encrypt stored GitHub access tokens (auto-generated in Render). |
+| `TOKEN_ENCRYPTION_SALT` | Both | 16-character hex salt string (default: `0123456789abcdef`). |
+| `APP_FRONTEND_URL` | Prod | Frontend domain used for post-login OAuth redirects (e.g. `https://devpilot-web.onrender.com`). |
+| `APP_CORS_ALLOWED_ORIGINS` | Both | Comma-separated allowed CORS origins (e.g. `https://devpilot-web.onrender.com`). |
+| `NEXT_PUBLIC_API_BASE_URL` | Frontend | Browser-accessible backend API base URL (e.g. `https://devpilot-api.onrender.com`). |
+| `PORT` | Optional | Port for the backend service (default: `8080`). |
+
+---
+
+## Known V1 Limitations
+
+- **File Chunking**: Employs heuristic sliding-window chunking by line count rather than AST-based parsing.
+- **In-Process Ingestion**: Ingestion tasks execute asynchronously on a dedicated thread pool rather than a distributed broker (such as Kafka or RabbitMQ).
+- **Single-Host Concurrency**: Suitable for single-instance or active-passive instances. Multi-instance horizontal scaling for ingestion would require a distributed task coordinator.
+- **Repository Size Limit**: Default maximum file size threshold is 100 KB to avoid embedding large generated assets or bundle outputs.
+
+---
 
 ## License
 
-No license file is currently present in the repository.
+MIT License. See [LICENSE](LICENSE) for details.

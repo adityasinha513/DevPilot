@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import devPilot.backend.dto.*;
 import devPilot.backend.entity.*;
 import devPilot.backend.exceptions.NotFoundException;
+import devPilot.backend.exceptions.ExternalServiceException;
 import devPilot.backend.repository.*;
 import java.util.*;
 import lombok.RequiredArgsConstructor;
@@ -21,6 +22,8 @@ public class RepositoryChatService {
     private final ChatClient.Builder chatClientBuilder; private final ObjectMapper objectMapper;
     @Value("${app.rag.max-context-characters:24000}") private int maxContextCharacters;
     @Value("${app.rag.history-messages:8}") private int historyMessages;
+    @Value("${app.ai.max-retries:3}") private int maxRetries;
+    @Value("${app.ai.retry-backoff-ms:750}") private long retryBackoffMs;
 
     @Transactional public ConversationResponse create(UUID userId, UUID repositoryId, String title) {
         GitRepository repository = repository(userId, repositoryId);
@@ -44,12 +47,56 @@ public class RepositoryChatService {
         }
         ContextBundle context = buildContext(hits);
         List<CitationResponse> citations = context.hits().stream().map(hit -> citation(conversation.getRepository(), hit)).toList();
-        String answer = chatClientBuilder.build().prompt().system(systemPrompt()).user("Repository context:\n" + context.text()
-                + "\n\nConversation history:\n" + history(conversation.getId()) + "\n\nCurrent question: " + cleanQuestion).call().content();
+        String answer = callChatModelWithRetry(context.text(), history(conversation.getId()), cleanQuestion);
         ChatMessage assistant = messages.save(ChatMessage.builder().conversation(conversation).role(ChatMessage.Role.ASSISTANT)
                 .content(answer == null || answer.isBlank() ? "I could not generate an answer from the retrieved repository context." : answer)
                 .citationsJson(write(citations)).build());
         return new ChatTurnResponse(message(user), message(assistant));
+    }
+
+    private String callChatModelWithRetry(String contextText, String conversationHistory, String question) {
+        RuntimeException last = null;
+        for (int attempt = 1; attempt <= Math.max(1, maxRetries); attempt++) {
+            try {
+                return chatClientBuilder.build().prompt()
+                        .system(systemPrompt())
+                        .user("Repository context:\n" + contextText
+                                + "\n\nConversation history:\n" + conversationHistory
+                                + "\n\nCurrent question: " + question)
+                        .call()
+                        .content();
+            } catch (RuntimeException exception) {
+                last = exception;
+                if (isPermanentError(exception)) {
+                    throw new ExternalServiceException("Chat provider rejected request", exception);
+                }
+                if (attempt < maxRetries) {
+                    try {
+                        Thread.sleep(retryBackoffMs * attempt);
+                    } catch (InterruptedException interrupted) {
+                        Thread.currentThread().interrupt();
+                        break;
+                    }
+                }
+            }
+        }
+        throw new ExternalServiceException("Chat provider is unavailable", last);
+    }
+
+    private boolean isPermanentError(Throwable throwable) {
+        Throwable current = throwable;
+        while (current != null) {
+            if (current instanceof org.springframework.web.client.HttpClientErrorException clientError) {
+                if (clientError.getStatusCode().value() != 429) {
+                    return true;
+                }
+            }
+            if (current.getClass().getSimpleName().contains("NonTransient")) {
+                return true;
+            }
+            current = current.getCause();
+        }
+        return false;
     }
     private ContextBundle buildContext(List<VectorEmbeddingStore.SearchHit> hits) {
         StringBuilder context = new StringBuilder(); List<VectorEmbeddingStore.SearchHit> included = new ArrayList<>();

@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useEffect, useState } from "react";
+import { Suspense, useEffect } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { AlertCircle } from "lucide-react";
 
@@ -23,20 +23,14 @@ function LoginForm() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { user, isLoading } = useAuth();
-  const [error, setError] = useState("");
+  const code = searchParams.get("error");
+  const error = code ? (OAUTH_ERROR_MESSAGES[code] ?? "Unable to sign in. Please try again.") : "";
 
   useEffect(() => {
     if (!isLoading && user) {
       router.replace("/dashboard");
     }
   }, [isLoading, user, router]);
-
-  useEffect(() => {
-    const code = searchParams.get("error");
-    if (code) {
-      setError(OAUTH_ERROR_MESSAGES[code] ?? "Unable to sign in. Please try again.");
-    }
-  }, [searchParams]);
 
   if (isLoading) {
     return (

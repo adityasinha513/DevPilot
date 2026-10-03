@@ -15,11 +15,23 @@ export class ApiError extends Error {
 }
 
 export function getApiBaseUrl(){
-    return process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8080";
+    const url = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8080";
+    return url.replace(/\/+$/, "");
 }
 
 export function getGithubLoginUrl() {
     return `${getApiBaseUrl()}/oauth2/authorization/github`;
+}
+
+let csrfToken: Promise<{ headerName: string; token: string }> | null = null;
+
+async function getCsrfToken() {
+    csrfToken ??= fetch(`${getApiBaseUrl()}/api/auth/csrf`, { credentials: "include" })
+        .then(async (response) => {
+            if (!response.ok) throw new ApiError(response.status, await parseError(response));
+            return response.json() as Promise<{ headerName: string; token: string }>;
+        });
+    try { return await csrfToken; } catch (error) { csrfToken = null; throw error; }
 }
 
 async function parseError(res: Response): Promise<string> {
@@ -36,6 +48,11 @@ export async function apiFetch<T>(
     options: RequestInit = {},
 ): Promise<T> {
     const headers = new Headers(options.headers);
+
+    if (!["GET", "HEAD", "OPTIONS"].includes((options.method ?? "GET").toUpperCase())) {
+        const csrf = await getCsrfToken();
+        headers.set(csrf.headerName, csrf.token);
+    }
 
     if (options.body && !headers.has("Content-Type")) {
         headers.set("Content-Type", "application/json");

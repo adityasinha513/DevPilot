@@ -4,11 +4,14 @@ import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Deque;
 import java.util.List;
+import java.util.function.Supplier;
+import java.time.Duration;
 
 import devPilot.backend.entity.User;
 import devPilot.backend.exceptions.BadRequestException;
 import devPilot.backend.exceptions.NotFoundException;
 import devPilot.backend.exceptions.UnauthorizedException;
+import devPilot.backend.exceptions.ExternalServiceException;
 import devPilot.backend.github.GitHubApiModels.GitHubBlobJson;
 import devPilot.backend.github.GitHubApiModels.GitHubCommitJson;
 import devPilot.backend.github.GitHubApiModels.GitHubRefJson;
@@ -21,6 +24,8 @@ import org.springframework.http.HttpHeaders;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.RestClient;
+import org.springframework.web.client.ResourceAccessException;
+import org.springframework.http.client.SimpleClientHttpRequestFactory;
 
 @Service
 public class GitHubApiService {
@@ -28,14 +33,26 @@ public class GitHubApiService {
     private final RestClient restClient;
     private final UserService userService;
     private final long apiDelayMs;
+    private final int maxRetries;
+    private final long retryBackoffMs;
 
     public GitHubApiService(
             UserService userService,
-            @Value("${app.github.api-delay-ms:50}") long apiDelayMs) {
+            @Value("${app.github.api-delay-ms:50}") long apiDelayMs,
+            @Value("${app.github.max-retries:3}") int maxRetries,
+            @Value("${app.github.retry-backoff-ms:500}") long retryBackoffMs,
+            @Value("${app.github.connect-timeout-seconds:10}") long connectTimeoutSeconds,
+            @Value("${app.github.read-timeout-seconds:30}") long readTimeoutSeconds) {
         this.userService = userService;
         this.apiDelayMs = apiDelayMs;
+        this.maxRetries = Math.max(1, maxRetries);
+        this.retryBackoffMs = Math.max(0, retryBackoffMs);
+        SimpleClientHttpRequestFactory requestFactory = new SimpleClientHttpRequestFactory();
+        requestFactory.setConnectTimeout(Duration.ofSeconds(connectTimeoutSeconds));
+        requestFactory.setReadTimeout(Duration.ofSeconds(readTimeoutSeconds));
         this.restClient = RestClient.builder()
                 .baseUrl("https://api.github.com")
+                .requestFactory(requestFactory)
                 .defaultHeader(HttpHeaders.ACCEPT, "application/vnd.github+json")
                 .defaultHeader("X-GitHub-Api-Version", "2022-11-28")
                 .build();
@@ -45,11 +62,11 @@ public class GitHubApiService {
         String token = userService.decryptAccessToken(user);
         try {
             pauseIfNeeded();
-            GitHubRefJson ref = restClient.get()
+            GitHubRefJson ref = withRetries(() -> restClient.get()
                     .uri("/repos/{owner}/{repo}/git/ref/heads/{branch}", owner, repo, branch)
                     .header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
                     .retrieve()
-                    .body(GitHubRefJson.class);
+                    .body(GitHubRefJson.class));
             if (ref == null || ref.object() == null || ref.object().sha() == null) {
                 throw new NotFoundException("Could not resolve branch: " + branch);
             }
@@ -65,11 +82,11 @@ public class GitHubApiService {
         String token = userService.decryptAccessToken(user);
         try {
             pauseIfNeeded();
-            GitHubCommitJson commit = restClient.get()
+            GitHubCommitJson commit = withRetries(() -> restClient.get()
                     .uri("/repos/{owner}/{repo}/git/commits/{commitSha}", owner, repo, commitSha)
                     .header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
                     .retrieve()
-                    .body(GitHubCommitJson.class);
+                    .body(GitHubCommitJson.class));
             if (commit == null || commit.tree() == null || commit.tree().sha() == null) {
                 throw new BadRequestException("Could not resolve commit tree for " + commitSha);
             }
@@ -99,11 +116,11 @@ public class GitHubApiService {
         String token = userService.decryptAccessToken(user);
         try {
             pauseIfNeeded();
-            return restClient.get()
+            return withRetries(() -> restClient.get()
                     .uri("/repos/{owner}/{repo}/git/blobs/{sha}", owner, repo, blobSha)
                     .header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
                     .retrieve()
-                    .body(GitHubBlobJson.class);
+                    .body(GitHubBlobJson.class));
         } catch (HttpClientErrorException.NotFound ex) {
             throw new NotFoundException("Blob not found: " + blobSha);
         } catch (HttpClientErrorException.Unauthorized | HttpClientErrorException.Forbidden ex) {
@@ -118,7 +135,7 @@ public class GitHubApiService {
 
         try {
             pauseIfNeeded();
-            GitHubRepositoryJson[] repos = restClient.get()
+            GitHubRepositoryJson[] repos = withRetries(() -> restClient.get()
                     .uri(uri -> uri
                             .path("/user/repos")
                             .queryParam("sort", "updated")
@@ -127,7 +144,7 @@ public class GitHubApiService {
                             .build())
                     .header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
                     .retrieve()
-                    .body(GitHubRepositoryJson[].class);
+                    .body(GitHubRepositoryJson[].class));
 
             if (repos == null) {
                 return List.of();
@@ -142,11 +159,11 @@ public class GitHubApiService {
         String token = userService.decryptAccessToken(user);
         try {
             pauseIfNeeded();
-            return restClient.get()
+            return withRetries(() -> restClient.get()
                     .uri("/repos/{owner}/{repo}", ref.owner(), ref.name())
                     .header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
                     .retrieve()
-                    .body(GitHubRepositoryJson.class);
+                    .body(GitHubRepositoryJson.class));
         } catch (HttpClientErrorException.NotFound ex) {
             throw new NotFoundException("Repository not found or you do not have access: " + ref.fullName());
         } catch (HttpClientErrorException.Unauthorized | HttpClientErrorException.Forbidden ex) {
@@ -207,18 +224,31 @@ public class GitHubApiService {
     private GitHubTreeJson fetchTree(String token, String owner, String repo, String treeSha, boolean recursive) {
         try {
             pauseIfNeeded();
-            return restClient.get()
+            return withRetries(() -> restClient.get()
                     .uri("/repos/{owner}/{repo}/git/trees/{treeSha}?recursive={recursive}",
                             owner, repo, treeSha, recursive ? "1" : "0")
                     .header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
                     .retrieve()
-                    .body(GitHubTreeJson.class);
+                    .body(GitHubTreeJson.class));
         } catch (HttpClientErrorException.Unauthorized | HttpClientErrorException.Forbidden ex) {
             throw new UnauthorizedException("GitHub access token is invalid or lacks repository access");
         }
     }
 
     private record QueuedTree(String sha, String prefix) {
+    }
+
+    private <T> T withRetries(Supplier<T> request) {
+        ResourceAccessException lastFailure = null;
+        for (int attempt = 1; attempt <= maxRetries; attempt++) {
+            try {
+                return request.get();
+            } catch (ResourceAccessException exception) {
+                lastFailure = exception;
+                if (attempt < maxRetries) sleep(retryBackoffMs * attempt);
+            }
+        }
+        throw new ExternalServiceException("GitHub is unavailable", lastFailure);
     }
 
     private void pauseIfNeeded() {
@@ -231,5 +261,10 @@ public class GitHubApiService {
             Thread.currentThread().interrupt();
             throw new BadRequestException("GitHub API request interrupted");
         }
+    }
+
+    private void sleep(long delayMs) {
+        if (delayMs <= 0) return;
+        try { Thread.sleep(delayMs); } catch (InterruptedException exception) { Thread.currentThread().interrupt(); throw new ExternalServiceException("GitHub request interrupted", exception); }
     }
 }

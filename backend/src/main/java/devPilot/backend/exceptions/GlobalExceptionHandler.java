@@ -32,6 +32,11 @@ public class GlobalExceptionHandler {
 		return errorResponse(HttpStatus.UNAUTHORIZED, exception.getMessage());
 	}
 
+	@ExceptionHandler(ExternalServiceException.class)
+	public ResponseEntity<Map<String, Object>> handleExternalService(ExternalServiceException exception) {
+		return errorResponse(HttpStatus.SERVICE_UNAVAILABLE, "A required external service is temporarily unavailable. Please try again.");
+	}
+
 	@ExceptionHandler(MethodArgumentNotValidException.class)
 	public ResponseEntity<Map<String, Object>> handleValidation(MethodArgumentNotValidException exception) {
 		Map<String, String> validationErrors = new LinkedHashMap<>();
