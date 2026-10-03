@@ -54,6 +54,12 @@ public class DatabaseConfig {
             }
         }
 
+        if (jdbcUrl != null && jdbcUrl.startsWith("jdbc:postgresql://")) {
+            if ((jdbcUrl.contains("supabase.co") || jdbcUrl.contains("supabase.com")) && !jdbcUrl.contains("sslmode=")) {
+                jdbcUrl = jdbcUrl.contains("?") ? jdbcUrl + "&sslmode=require" : jdbcUrl + "?sslmode=require";
+            }
+        }
+
         HikariDataSource ds = new HikariDataSource();
         ds.setJdbcUrl(jdbcUrl);
         if (resolvedUsername != null && !resolvedUsername.isBlank()) {

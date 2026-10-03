@@ -28,7 +28,7 @@ flowchart TD
         OAI[OpenAI gpt-4o-mini & text-embedding-3-small]
     end
 
-    subgraph Storage ["Database (Render PostgreSQL)"]
+    subgraph Storage ["Database (Supabase Free PostgreSQL)"]
         PG[(PostgreSQL + pgvector)]
     end
 
@@ -222,64 +222,105 @@ Runs a multi-stage Alpine build with Next.js Turbopack compilation and creates a
 
 ---
 
-## Render Deployment
+## Free Production Deployment (Render + Supabase)
 
-DevPilot is pre-configured for automated deployment on **Render** using the provided [`render.yaml`](render.yaml) blueprint.
+DevPilot is architected for **100% free hosting with zero credit-card requirements**:
+- **Frontend**: Render Free Web Service (`devpilot-client`)
+- **Backend**: Render Free Web Service (`devpilot-backend`)
+- **Database & Vectors**: Supabase Free PostgreSQL 16+ with `pgvector`
 
-### Deployment Architecture on Render
-1. **Database**: Render PostgreSQL database (`devpilot-db`) with `pgvector` extension support.
-2. **Backend**: Render Web Service (`devpilot-api`) running Docker runtime from `backend/Dockerfile` with health checks at `/actuator/health`.
-3. **Frontend**: Render Web Service (`devpilot-web`) running Docker runtime from `client/Dockerfile`.
+---
 
-### Step-by-Step Render Deployment
+### Step 1: Set Up Supabase Free Database
 
-1. **Push to GitHub**: Ensure all code is committed and pushed to your repository.
-2. **Create GitHub OAuth App**:
-   - Application Name: `DevPilot`
-   - Homepage URL: `https://<frontend-service-name>.onrender.com`
-   - Authorization callback URL:
+1. Sign up or log into [Supabase](https://supabase.com).
+2. Click **New Project**:
+   - **Name**: `devpilot`
+   - **Database Password**: Choose and safely record a strong password.
+   - **Pricing Plan**: Free tier ($0/mo).
+3. **Verify/Enable pgvector**:
+   - In your Supabase dashboard, navigate to **Database** → **Extensions**.
+   - Search for `vector`. If not already enabled, toggle it on (Flyway's `V1__initial_schema.sql` also executes `CREATE EXTENSION IF NOT EXISTS vector;` on first migration).
+4. **Obtain Connection Details**:
+   - Click **Connect** (or project **Settings** → **Database**).
+   - In the connection mode selector, choose **Session pooler** (port `5432`).
+   - Copy your connection string or individual components:
+     - **Host**: `aws-0-[region].pooler.supabase.com`
+     - **Port**: `5432`
+     - **Database**: `postgres`
+     - **User**: `postgres.[your-project-ref]`
+     - **Password**: `[your-database-password]`
+
+---
+
+### Step 2: Register GitHub OAuth Application
+
+1. In GitHub, go to **Settings** → **Developer settings** → **OAuth Apps** → **New OAuth App**.
+2. Fill in:
+   - **Application Name**: `DevPilot Production`
+   - **Homepage URL**: `https://devpilot-client.onrender.com` *(or your custom client URL)*
+   - **Authorization callback URL**:
      ```text
-     https://<backend-service-name>.onrender.com/login/oauth2/code/github
+     https://devpilot-backend.onrender.com/login/oauth2/code/github
      ```
-3. **Deploy via Render Blueprint**:
-   - Log into the [Render Dashboard](https://dashboard.render.com).
-   - Click **New +** > **Blueprint**.
-   - Connect your `DevPilot` repository.
-   - Render will parse `render.yaml` and configure:
-     - `devpilot-db` (PostgreSQL)
-     - `devpilot-api` (Backend Docker Web Service)
-     - `devpilot-web` (Frontend Docker Web Service)
-4. **Supply Environment Variables**:
-   Render will prompt for missing secret environment variables:
-   - `GITHUB_CLIENT_ID`: Your GitHub OAuth App Client ID
-   - `GITHUB_CLIENT_SECRET`: Your GitHub OAuth App Client Secret
-   - `OPENAI_API_KEY`: Your OpenAI API Key
-   - `APP_FRONTEND_URL`: `https://<frontend-service-name>.onrender.com`
-   - `APP_CORS_ALLOWED_ORIGINS`: `https://<frontend-service-name>.onrender.com`
-   - `NEXT_PUBLIC_API_BASE_URL`: `https://<backend-service-name>.onrender.com`
-5. **Apply & Deploy**:
-   Click **Apply**. Render will automatically provision PostgreSQL, compile and launch the backend with Flyway migrations, and build the frontend container.
+3. Click **Register application**.
+4. Generate and copy your **Client ID** and **Client Secret**.
+
+---
+
+### Step 3: Deploy on Render Free Tier
+
+You can deploy using Render's Blueprint with [`render.yaml`](render.yaml) or by manually creating two free Web Services:
+
+#### Option A: Via Render Blueprint
+1. Log into [Render Dashboard](https://dashboard.render.com).
+2. Click **New +** → **Blueprint**.
+3. Select your repository: `adityasinha513/DevPilot`.
+4. Render will parse `render.yaml` and configure two free Web Services (`devpilot-backend` and `devpilot-client`).
+5. Fill in the prompted environment variables (listed below) and click **Apply**.
+
+#### Option B: Manual Web Service Creation (Alternative)
+1. **Backend Service**:
+   - Click **New +** → **Web Service** → Select repository.
+   - **Name**: `devpilot-backend`
+   - **Root Directory**: `backend`
+   - **Runtime**: `Docker` (using `./Dockerfile`)
+   - **Instance Type**: **Free**
+   - **Health Check Path**: `/actuator/health`
+   - Add backend environment variables below.
+2. **Frontend Service**:
+   - Click **New +** → **Web Service** → Select repository.
+   - **Name**: `devpilot-client`
+   - **Root Directory**: `client`
+   - **Runtime**: `Docker` (using `./Dockerfile`)
+   - **Instance Type**: **Free**
+   - Set Build Argument: `NEXT_PUBLIC_API_BASE_URL=https://devpilot-backend.onrender.com`
+   - Set Environment Variable: `NEXT_PUBLIC_API_BASE_URL=https://devpilot-backend.onrender.com`
 
 ---
 
 ## Environment Variables Reference
 
-| Variable | Required In | Description |
-|---|---|---|
-| `DATABASE_URL` | Both | Database connection URL. Accepts both `jdbc:postgresql://...` and cloud URI format `postgresql://user:pass@host:port/db`. Auto-wired via `render.yaml`. |
-| `DATABASE_USERNAME` | Local | PostgreSQL username (optional if encoded in `DATABASE_URL`). |
-| `DATABASE_PASSWORD` | Local | PostgreSQL password (optional if encoded in `DATABASE_URL`). |
-| `GITHUB_CLIENT_ID` | Both | GitHub OAuth application client ID. |
-| `GITHUB_CLIENT_SECRET` | Both | GitHub OAuth application client secret. |
-| `OPENAI_API_KEY` | Both | OpenAI API key for embeddings and Q&A chat. |
-| `OPENAI_CHAT_MODEL` | Optional | Chat model name (default: `gpt-4o-mini`). |
-| `OPENAI_EMBEDDING_MODEL` | Optional | Embedding model name (default: `text-embedding-3-small`). |
-| `TOKEN_ENCRYPTION_PASSWORD` | Both | Secret key used to encrypt stored GitHub access tokens (auto-generated in Render). |
-| `TOKEN_ENCRYPTION_SALT` | Both | 16-character hex salt string (default: `0123456789abcdef`). |
-| `APP_FRONTEND_URL` | Prod | Frontend domain used for post-login OAuth redirects (e.g. `https://devpilot-web.onrender.com`). |
-| `APP_CORS_ALLOWED_ORIGINS` | Both | Comma-separated allowed CORS origins (e.g. `https://devpilot-web.onrender.com`). |
-| `NEXT_PUBLIC_API_BASE_URL` | Frontend | Browser-accessible backend API base URL (e.g. `https://devpilot-api.onrender.com`). |
-| `PORT` | Optional | Port for the backend service (default: `8080`). |
+### Backend (`devpilot-backend`)
+| Variable | Value / Description |
+|---|---|
+| `DATABASE_URL` | Supabase Session Pooler URL (e.g. `jdbc:postgresql://aws-0-[region].pooler.supabase.com:5432/postgres?sslmode=require` or `postgresql://...`) |
+| `DATABASE_USERNAME` | Supabase pooler username (e.g. `postgres.[project-ref]`) |
+| `DATABASE_PASSWORD` | Your Supabase database password |
+| `SPRING_PROFILES_ACTIVE` | `prod` |
+| `PORT` | `8080` |
+| `GITHUB_CLIENT_ID` | Your GitHub OAuth App Client ID |
+| `GITHUB_CLIENT_SECRET` | Your GitHub OAuth App Client Secret |
+| `OPENAI_API_KEY` | Your OpenAI API Key (`sk-...`) |
+| `TOKEN_ENCRYPTION_PASSWORD` | Strong random encryption passphrase for token encryption |
+| `TOKEN_ENCRYPTION_SALT` | `0123456789abcdef` |
+| `APP_FRONTEND_URL` | `https://devpilot-client.onrender.com` |
+| `APP_CORS_ALLOWED_ORIGINS` | `https://devpilot-client.onrender.com` |
+
+### Frontend (`devpilot-client`)
+| Variable | Value / Description |
+|---|---|
+| `NEXT_PUBLIC_API_BASE_URL` | `https://devpilot-backend.onrender.com` *(Set in both Docker Build Arguments and Environment Variables)* |
 
 ---
 

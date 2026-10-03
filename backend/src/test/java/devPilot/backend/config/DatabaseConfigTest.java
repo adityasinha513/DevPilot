@@ -48,4 +48,28 @@ class DatabaseConfigTest {
         assertEquals("render_secret", hikari.getPassword());
         hikari.close();
     }
+
+    @Test
+    void testSupabaseSessionPoolerUriConvertedToJdbc() {
+        DataSource ds = config.dataSource("postgresql://postgres.myprojectref:supabaseSecret123@aws-0-us-east-1.pooler.supabase.com:5432/postgres", "", "", "org.postgresql.Driver");
+        assertNotNull(ds);
+        assertTrue(ds instanceof HikariDataSource);
+        HikariDataSource hikari = (HikariDataSource) ds;
+        assertEquals("jdbc:postgresql://aws-0-us-east-1.pooler.supabase.com:5432/postgres?sslmode=require", hikari.getJdbcUrl());
+        assertEquals("postgres.myprojectref", hikari.getUsername());
+        assertEquals("supabaseSecret123", hikari.getPassword());
+        hikari.close();
+    }
+
+    @Test
+    void testSupabaseJdbcUrlAppendsSslMode() {
+        DataSource ds = config.dataSource("jdbc:postgresql://aws-0-us-east-1.pooler.supabase.com:5432/postgres", "postgres.myprojectref", "supabaseSecret123", "org.postgresql.Driver");
+        assertNotNull(ds);
+        assertTrue(ds instanceof HikariDataSource);
+        HikariDataSource hikari = (HikariDataSource) ds;
+        assertEquals("jdbc:postgresql://aws-0-us-east-1.pooler.supabase.com:5432/postgres?sslmode=require", hikari.getJdbcUrl());
+        assertEquals("postgres.myprojectref", hikari.getUsername());
+        assertEquals("supabaseSecret123", hikari.getPassword());
+        hikari.close();
+    }
 }
