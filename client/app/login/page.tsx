@@ -2,10 +2,10 @@
 
 import { Suspense, useEffect } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { AlertCircle } from "lucide-react";
+import { AlertCircle, Sparkles } from "lucide-react";
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { buttonVariants } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Spinner } from "@/components/ui/spinner";
 import { cn } from "@/lib/utils";
@@ -14,6 +14,7 @@ import { GitHubIcon } from "@/components/icons/github";
 import { ModeToggle } from "@/components/mode-toggle";
 import { useAuth } from "@/hooks/use-auth";
 import { getGithubLoginUrl } from "@/lib/api";
+import { enableDemoMode } from "@/lib/demo";
 
 const OAUTH_ERROR_MESSAGES: Record<string, string> = {
   oauth_failed: "GitHub sign-in was cancelled or failed. Please try again.",
@@ -70,6 +71,29 @@ function LoginForm() {
             <GitHubIcon className="mr-2 h-4 w-4" />
             Continue with GitHub
           </a>
+
+          <div className="relative my-6">
+            <div className="absolute inset-0 flex items-center">
+              <span className="w-full border-t" />
+            </div>
+            <div className="relative flex justify-center text-xs uppercase">
+              <span className="bg-card px-2 text-muted-foreground">Or</span>
+            </div>
+          </div>
+
+          <Button
+            type="button"
+            variant="outline"
+            className="w-full border-dashed"
+            onClick={() => {
+              enableDemoMode();
+              router.replace("/dashboard");
+            }}
+          >
+            <Sparkles className="mr-2 h-4 w-4 text-primary" />
+            Explore Interactive Demo (No backend required)
+          </Button>
+
           <p className="mt-6 text-center text-xs text-muted-foreground">
             DevPilot uses GitHub OAuth. Your access token stays on the server and is never
             exposed to the browser.

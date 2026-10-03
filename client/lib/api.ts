@@ -119,25 +119,96 @@ export type GitHubRepositorySummary = {
     description: string | null;
 };
 
+import {
+    isDemoMode,
+    disableDemoMode,
+    DEMO_USER,
+    DEMO_REPOSITORIES,
+    DEMO_GITHUB_CATALOG,
+    DEMO_CONVERSATIONS,
+    DEMO_MESSAGES,
+} from "./demo";
+
 export const api = {
-    me: () => apiFetch<User>("/api/auth/me"),
-    logout: () => apiFetch<void>("/api/auth/logout", { method: "POST" }),
-    listStoredRepositories: () => apiFetch<StoredRepository[]>("/api/repositories"),
+    me: () => (isDemoMode() ? Promise.resolve(DEMO_USER) : apiFetch<User>("/api/auth/me")),
+    logout: () => {
+        if (isDemoMode()) {
+            disableDemoMode();
+            return Promise.resolve();
+        }
+        return apiFetch<void>("/api/auth/logout", { method: "POST" });
+    },
+    listStoredRepositories: () =>
+        isDemoMode() ? Promise.resolve(DEMO_REPOSITORIES) : apiFetch<StoredRepository[]>("/api/repositories"),
     listGitHubCatalog: (page = 1, perPage = 30) =>
-        apiFetch<GitHubRepositorySummary[]>(
-            `/api/repositories/catalog?page=${page}&perPage=${perPage}`,
-        ),
+        isDemoMode()
+            ? Promise.resolve(DEMO_GITHUB_CATALOG)
+            : apiFetch<GitHubRepositorySummary[]>(
+                  `/api/repositories/catalog?page=${page}&perPage=${perPage}`,
+              ),
     connectRepository: (reference: string) =>
-        apiFetch<StoredRepository>("/api/repositories", {
-            method: "POST",
-            body: JSON.stringify({ reference }),
-        }),
+        isDemoMode()
+            ? Promise.resolve(DEMO_REPOSITORIES[0])
+            : apiFetch<StoredRepository>("/api/repositories", {
+                  method: "POST",
+                  body: JSON.stringify({ reference }),
+              }),
     retryRepositoryIngestion: (repositoryId: string) =>
-        apiFetch<StoredRepository>(`/api/repositories/${repositoryId}/retry-ingestion`, {
-            method: "POST",
-        }),
-    listConversations: (repositoryId: string) => apiFetch<Conversation[]>(`/api/repositories/${repositoryId}/conversations`),
-    createConversation: (repositoryId: string, title = "New conversation") => apiFetch<Conversation>(`/api/repositories/${repositoryId}/conversations`, { method: "POST", body: JSON.stringify({ title }) }),
-    listMessages: (conversationId: string) => apiFetch<ChatMessage[]>(`/api/conversations/${conversationId}/messages`),
-    sendMessage: (conversationId: string, content: string) => apiFetch<{ userMessage: ChatMessage; assistantMessage: ChatMessage }>(`/api/conversations/${conversationId}/messages`, { method: "POST", body: JSON.stringify({ content }) }),
+        isDemoMode()
+            ? Promise.resolve(DEMO_REPOSITORIES[0])
+            : apiFetch<StoredRepository>(`/api/repositories/${repositoryId}/retry-ingestion`, {
+                  method: "POST",
+              }),
+    listConversations: (repositoryId: string) =>
+        isDemoMode()
+            ? Promise.resolve(DEMO_CONVERSATIONS)
+            : apiFetch<Conversation[]>(`/api/repositories/${repositoryId}/conversations`),
+    createConversation: (repositoryId: string, title = "New conversation") =>
+        isDemoMode()
+            ? Promise.resolve({
+                  id: `demo-conv-${Date.now()}`,
+                  repositoryId,
+                  title,
+                  createdAt: new Date().toISOString(),
+                  updatedAt: new Date().toISOString(),
+              })
+            : apiFetch<Conversation>(`/api/repositories/${repositoryId}/conversations`, {
+                  method: "POST",
+                  body: JSON.stringify({ title }),
+              }),
+    listMessages: (conversationId: string) =>
+        isDemoMode()
+            ? Promise.resolve(DEMO_MESSAGES[conversationId] ?? DEMO_MESSAGES["demo-conv-1"])
+            : apiFetch<ChatMessage[]>(`/api/conversations/${conversationId}/messages`),
+    sendMessage: (conversationId: string, content: string) => {
+        if (isDemoMode()) {
+            const userMsg: ChatMessage = {
+                id: `demo-u-${Date.now()}`,
+                role: "USER",
+                content,
+                citations: [],
+                createdAt: new Date().toISOString(),
+            };
+            const assistantMsg: ChatMessage = {
+                id: `demo-a-${Date.now()}`,
+                role: "ASSISTANT",
+                content: `[Demo Mode Response] You asked: "${content}"\n\nIn this static demo environment, natural language answers and pgvector similarity queries are simulated from curated repository code snippets. When deployed with the live Spring Boot backend, DevPilot vectorizes your questions with OpenAI \`text-embedding-3-small\`, executes an HNSW cosine search, and provides live answers with verified GitHub line-range citations.`,
+                citations: [
+                    {
+                        chunkId: "demo-chunk-highlight",
+                        path: "backend/src/main/java/devPilot/backend/services/RepositoryChatService.java",
+                        startLine: 42,
+                        endLine: 89,
+                        url: "https://github.com/adityasinha513/DevPilot/blob/main/backend/src/main/java/devPilot/backend/services/RepositoryChatService.java#L42-L89",
+                    },
+                ],
+                createdAt: new Date().toISOString(),
+            };
+            return Promise.resolve({ userMessage: userMsg, assistantMessage: assistantMsg });
+        }
+        return apiFetch<{ userMessage: ChatMessage; assistantMessage: ChatMessage }>(
+            `/api/conversations/${conversationId}/messages`,
+            { method: "POST", body: JSON.stringify({ content }) },
+        );
+    },
 };
